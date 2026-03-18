@@ -75,6 +75,21 @@ pub enum View {
     Detail(DetailState),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DetailFocus {
+    ConsumerGroups,
+    Processes,
+}
+
+impl DetailFocus {
+    pub fn toggle(self) -> Self {
+        match self {
+            DetailFocus::ConsumerGroups => DetailFocus::Processes,
+            DetailFocus::Processes => DetailFocus::ConsumerGroups,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct DetailState {
     pub group_idx: usize,
@@ -83,6 +98,8 @@ pub struct DetailState {
     pub selected_pid: usize,
     pub confirm_cleanup: bool,
     pub consumer_groups: Vec<discovery::ConsumerGroupInfo>,
+    pub focus: DetailFocus,
+    pub selected_group: usize,
 }
 
 /// What the cursor is pointing at in the list view.
@@ -421,12 +438,20 @@ impl App {
                     self.selected = (self.selected + 1).min(self.total_rows.saturating_sub(1));
                 }
             }
-            View::Detail(detail) => {
-                if !detail.pids.is_empty() {
-                    detail.selected_pid =
-                        (detail.selected_pid + 1).min(detail.pids.len().saturating_sub(1));
+            View::Detail(detail) => match detail.focus {
+                DetailFocus::ConsumerGroups => {
+                    if !detail.consumer_groups.is_empty() {
+                        detail.selected_group = (detail.selected_group + 1)
+                            .min(detail.consumer_groups.len().saturating_sub(1));
+                    }
                 }
-            }
+                DetailFocus::Processes => {
+                    if !detail.pids.is_empty() {
+                        detail.selected_pid =
+                            (detail.selected_pid + 1).min(detail.pids.len().saturating_sub(1));
+                    }
+                }
+            },
         }
     }
 
@@ -435,16 +460,24 @@ impl App {
             View::List => {
                 self.selected = self.selected.saturating_sub(1);
             }
-            View::Detail(detail) => {
-                detail.selected_pid = detail.selected_pid.saturating_sub(1);
-            }
+            View::Detail(detail) => match detail.focus {
+                DetailFocus::ConsumerGroups => {
+                    detail.selected_group = detail.selected_group.saturating_sub(1);
+                }
+                DetailFocus::Processes => {
+                    detail.selected_pid = detail.selected_pid.saturating_sub(1);
+                }
+            },
         }
     }
 
     pub fn home(&mut self) {
         match &mut self.view {
             View::List => self.selected = 0,
-            View::Detail(detail) => detail.selected_pid = 0,
+            View::Detail(detail) => match detail.focus {
+                DetailFocus::ConsumerGroups => detail.selected_group = 0,
+                DetailFocus::Processes => detail.selected_pid = 0,
+            },
         }
     }
 
@@ -455,11 +488,18 @@ impl App {
                     self.selected = self.total_rows - 1;
                 }
             }
-            View::Detail(detail) => {
-                if !detail.pids.is_empty() {
-                    detail.selected_pid = detail.pids.len() - 1;
+            View::Detail(detail) => match detail.focus {
+                DetailFocus::ConsumerGroups => {
+                    if !detail.consumer_groups.is_empty() {
+                        detail.selected_group = detail.consumer_groups.len() - 1;
+                    }
                 }
-            }
+                DetailFocus::Processes => {
+                    if !detail.pids.is_empty() {
+                        detail.selected_pid = detail.pids.len() - 1;
+                    }
+                }
+            },
         }
     }
 
@@ -468,9 +508,14 @@ impl App {
             View::List => {
                 self.selected = self.selected.saturating_sub(10);
             }
-            View::Detail(detail) => {
-                detail.selected_pid = detail.selected_pid.saturating_sub(10);
-            }
+            View::Detail(detail) => match detail.focus {
+                DetailFocus::ConsumerGroups => {
+                    detail.selected_group = detail.selected_group.saturating_sub(10);
+                }
+                DetailFocus::Processes => {
+                    detail.selected_pid = detail.selected_pid.saturating_sub(10);
+                }
+            },
         }
     }
 
@@ -481,12 +526,20 @@ impl App {
                     self.selected = (self.selected + 10).min(self.total_rows.saturating_sub(1));
                 }
             }
-            View::Detail(detail) => {
-                if !detail.pids.is_empty() {
-                    detail.selected_pid =
-                        (detail.selected_pid + 10).min(detail.pids.len().saturating_sub(1));
+            View::Detail(detail) => match detail.focus {
+                DetailFocus::ConsumerGroups => {
+                    if !detail.consumer_groups.is_empty() {
+                        detail.selected_group = (detail.selected_group + 10)
+                            .min(detail.consumer_groups.len().saturating_sub(1));
+                    }
                 }
-            }
+                DetailFocus::Processes => {
+                    if !detail.pids.is_empty() {
+                        detail.selected_pid =
+                            (detail.selected_pid + 10).min(detail.pids.len().saturating_sub(1));
+                    }
+                }
+            },
         }
     }
 
@@ -524,6 +577,11 @@ impl App {
                                 let consumer_groups =
                                     self.shmem_cache.consumer_groups(&segment.entry.flink);
 
+                                let initial_focus = if consumer_groups.is_empty() {
+                                    DetailFocus::Processes
+                                } else {
+                                    DetailFocus::ConsumerGroups
+                                };
                                 self.view = View::Detail(DetailState {
                                     group_idx: gi,
                                     segment_idx: si,
@@ -531,6 +589,8 @@ impl App {
                                     selected_pid: 0,
                                     confirm_cleanup: false,
                                     consumer_groups,
+                                    focus: initial_focus,
+                                    selected_group: 0,
                                 });
                                 return;
                             }
@@ -708,6 +768,15 @@ impl App {
         }
     }
 
+    pub fn toggle_detail_focus(&mut self) {
+        if let View::Detail(detail) = &mut self.view {
+            // Only toggle if there are consumer groups to focus on.
+            if !detail.consumer_groups.is_empty() {
+                detail.focus = detail.focus.toggle();
+            }
+        }
+    }
+
     /// Process a key event, returning `true` if the application should quit.
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
         if key.kind != KeyEventKind::Press {
@@ -799,6 +868,7 @@ impl App {
                 KeyCode::Char('d') => self.request_cleanup(),
                 KeyCode::Char('D') => self.request_cleanup_all(),
                 KeyCode::Char('r') => self.refresh(),
+                KeyCode::Tab => self.toggle_detail_focus(),
                 KeyCode::Up | KeyCode::Char('k') => self.previous(),
                 KeyCode::Down | KeyCode::Char('j') => self.next(),
                 KeyCode::Home | KeyCode::Char('g') => self.home(),
