@@ -54,6 +54,9 @@ struct ConnectionManager {
     telemetry: TcpTelemetry,
     socket_buf_size: Option<usize>,
     dcache: Option<Arc<DCache>>,
+    /// When true, accepted inbound connections use raw (unframed) streams
+    /// instead of length-prefixed framed streams.
+    raw_inbound: bool,
 
     // Always only outbound/client side connection streams
     to_be_reconnected: Vec<(Token, ConnectionVariant)>,
@@ -70,6 +73,7 @@ impl Default for ConnectionManager {
             telemetry: TcpTelemetry::Disabled,
             socket_buf_size: None,
             dcache: None,
+            raw_inbound: false,
             to_be_reconnected: Vec::with_capacity(10),
             reconnected_to: Vec::with_capacity(10),
             poll: Poll::new().expect("couldn't set up a poll for tcp connector"),
@@ -358,13 +362,17 @@ impl ConnectionManager {
                             error!("couldn't set nodelay on stream to {addr}: {e}");
                             continue;
                         }
-                        let mut conn = TcpStream::from_stream_with_telemetry(
-                            stream,
-                            token,
-                            addr,
-                            self.telemetry,
-                            self.dcache.is_some(),
-                        );
+                        let mut conn = if self.raw_inbound {
+                            TcpStream::raw(stream, token, addr, self.telemetry)
+                        } else {
+                            TcpStream::from_stream_with_telemetry(
+                                stream,
+                                token,
+                                addr,
+                                self.telemetry,
+                                self.dcache.is_some(),
+                            )
+                        };
 
                         if let Some(msg) = &self.on_connect_msg &&
                             conn.write_or_enqueue_with(
@@ -465,6 +473,19 @@ impl TcpConnector {
     /// Sets telemetry config for all streams created by this connector.
     pub fn with_telemetry(mut self, telemetry: TcpTelemetry) -> Self {
         self.conn_mgr.telemetry = telemetry;
+        self
+    }
+
+    /// Accepted inbound connections will use raw (unframed) streams instead of
+    /// length-prefixed framed streams.
+    ///
+    /// Raw streams deliver byte slices as-is to [`PollEvent::Message`]; the
+    /// caller is responsible for protocol framing and message reassembly.
+    ///
+    /// Outbound connections created via [`connect`] are unaffected and continue
+    /// to use framed streams.
+    pub fn with_raw_inbound(mut self) -> Self {
+        self.conn_mgr.raw_inbound = true;
         self
     }
 
