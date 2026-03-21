@@ -1,36 +1,65 @@
 use flux_communication::ShmemKind;
 use ratatui::{prelude::*, widgets::*};
 
-use super::app::{App, SelectedItem, View};
+use super::app::{App, SelectedItem, Tab, View};
 use crate::discovery::format_bytes;
 
 pub fn render(frame: &mut Frame, app: &mut App) {
-    match &app.view {
-        View::List => render_list(frame, app),
-        View::Detail(_) => render_detail(frame, app),
-        View::Tiles => render_tiles(frame, app),
+    let area = frame.area();
+
+    // ── Tab bar (always visible) ───────────────────────────────────
+    let outer = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(area);
+
+    render_tab_bar(frame, app, outer[0]);
+
+    // ── Tab content ────────────────────────────────────────────────
+    let content_area = outer[1];
+    match app.active_tab {
+        Tab::Segments => match &app.view {
+            View::List => render_list(frame, app, content_area),
+            View::Detail(_) => render_detail(frame, app, content_area),
+        },
+        Tab::TileMetrics => render_tiles(frame, app, content_area),
     }
 
+    // ── Overlays ───────────────────────────────────────────────────
     if app.confirm_cleanup_all {
-        render_confirm_all_popup(frame, app, frame.area());
-    } else {
+        render_confirm_all_popup(frame, app, area);
+    } else if app.active_tab == Tab::Segments {
         let confirming = match &app.view {
             View::List => app.confirm_cleanup,
             View::Detail(d) => d.confirm_cleanup,
-            View::Tiles => false,
         };
         if confirming {
-            render_confirm_popup(frame, frame.area());
+            render_confirm_popup(frame, area);
         }
     }
 
     if app.show_help {
-        render_help_popup(frame, frame.area());
+        render_help_popup(frame, app, area);
     }
 }
-fn render_list(frame: &mut Frame, app: &mut App) {
-    let area = frame.area();
 
+/// Render the tab bar at the top of the screen.
+fn render_tab_bar(frame: &mut Frame, app: &App, area: Rect) {
+    let mut spans = Vec::new();
+    for (i, tab) in Tab::ALL.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
+        }
+        let label = format!(" {} {} ", tab.number(), tab.label());
+        if *tab == app.active_tab {
+            spans.push(Span::styled(label, Style::default().fg(Color::White).bg(Color::DarkGray).bold()));
+        } else {
+            spans.push(Span::styled(label, Style::default().fg(Color::Gray)));
+        }
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+fn render_list(frame: &mut Frame, app: &mut App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(3), Constraint::Min(0), Constraint::Length(1)])
@@ -142,13 +171,14 @@ fn render_list(frame: &mut Frame, app: &mut App) {
         .row_highlight_style(Style::default().bg(Color::DarkGray));
 
     app.table_state.select(Some(app.selected));
+    // Reset viewport offset so the selected row is always visible after
+    // tab switches or terminal resizes.
+    *app.table_state.offset_mut() = 0;
     frame.render_stateful_widget(table, chunks[1], &mut app.table_state);
 
     render_status_bar(frame, app, chunks[2]);
 }
-fn render_detail(frame: &mut Frame, app: &mut App) {
-    let area = frame.area();
-
+fn render_detail(frame: &mut Frame, app: &mut App, area: Rect) {
     let has_groups = matches!(&app.view, View::Detail(d) if !d.consumer_groups.is_empty());
     let cg_height: u16 = if has_groups {
         match &app.view {
@@ -547,9 +577,7 @@ fn render_confirm_all_popup(frame: &mut Frame, app: &App, area: Rect) {
     );
 }
 
-fn render_tiles(frame: &mut Frame, app: &mut App) {
-    let area = frame.area();
-
+fn render_tiles(frame: &mut Frame, app: &mut App, area: Rect) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(3), Constraint::Min(0), Constraint::Length(1)])
@@ -769,61 +797,59 @@ fn util_colour(util: f64) -> Color {
 }
 
 fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
-    let confirming_single = match &app.view {
-        View::List => app.confirm_cleanup,
-        View::Detail(d) => d.confirm_cleanup,
-        View::Tiles => false,
-    };
-
     let has_any_dead = app.groups.iter().any(|g| g.segments.iter().any(|s| !s.alive));
 
     let text = if app.filter_mode {
         format!(" / {}█", app.filter_text)
-    } else if app.confirm_cleanup_all || confirming_single {
+    } else if app.active_tab == Tab::Segments && (app.confirm_cleanup_all || matches!(&app.view, View::List if app.confirm_cleanup) || matches!(&app.view, View::Detail(d) if d.confirm_cleanup)) {
         " Enter confirm  Esc cancel".into()
     } else if let Some((ref msg, _)) = app.status_msg {
         msg.clone()
     } else {
-        let filter_hint = if !app.filter_text.is_empty() {
-            format!("  [filter: {}]", app.filter_text)
-        } else {
-            String::new()
-        };
-        match &app.view {
-            View::List => {
-                let on_dead_seg = matches!(
-                    app.selected_item(),
-                    Some(SelectedItem::Segment(_, _, seg)) if !seg.alive
-                );
-                let dead_toggle = if app.hide_dead { "a show dead" } else { "a hide dead" };
-                let base = match (on_dead_seg, has_any_dead) {
-                    (true, _) => {
-                        format!(
-                            " ↑↓ navigate  Enter open  d destroy  D destroy all  {dead_toggle}  / filter  s sort  t tiles  ? help  q quit"
-                        )
-                    }
-                    (false, true) => {
-                        format!(
-                            " ↑↓ navigate  Enter open  D destroy all  {dead_toggle}  / filter  s sort  t tiles  ? help  q quit"
-                        )
-                    }
-                    _ => format!(
-                        " ↑↓ navigate  Enter open  {dead_toggle}  / filter  s sort  t tiles  ? help  q quit"
-                    ),
+        match app.active_tab {
+            Tab::Segments => {
+                let filter_hint = if !app.filter_text.is_empty() {
+                    format!("  [filter: {}]", app.filter_text)
+                } else {
+                    String::new()
                 };
-                format!("{}{}", base, filter_hint)
+                match &app.view {
+                    View::List => {
+                        let on_dead_seg = matches!(
+                            app.selected_item(),
+                            Some(SelectedItem::Segment(_, _, seg)) if !seg.alive
+                        );
+                        let dead_toggle = if app.hide_dead { "a show dead" } else { "a hide dead" };
+                        let base = match (on_dead_seg, has_any_dead) {
+                            (true, _) => {
+                                format!(
+                                    " ↑↓ navigate  Enter open  d destroy  D destroy all  {dead_toggle}  / filter  s sort  ? help  q quit"
+                                )
+                            }
+                            (false, true) => {
+                                format!(
+                                    " ↑↓ navigate  Enter open  D destroy all  {dead_toggle}  / filter  s sort  ? help  q quit"
+                                )
+                            }
+                            _ => format!(
+                                " ↑↓ navigate  Enter open  {dead_toggle}  / filter  s sort  ? help  q quit"
+                            ),
+                        };
+                        format!("{}{}", base, filter_hint)
+                    }
+                    View::Detail(_) => {
+                        let alive = app.detail_segment().map(|s| s.alive).unwrap_or(true);
+                        let base = match (!alive, has_any_dead) {
+                            (true, _) => " Esc back  d destroy  D destroy all  ? help  q quit",
+                            (false, true) => " Esc back  D destroy all  ? help  q quit",
+                            _ => " Esc back  ? help  q quit",
+                        };
+                        base.into()
+                    }
+                }
             }
-            View::Detail(_) => {
-                let alive = app.detail_segment().map(|s| s.alive).unwrap_or(true);
-                let base = match (!alive, has_any_dead) {
-                    (true, _) => " Esc back  d destroy  D destroy all  ? help  q quit",
-                    (false, true) => " Esc back  D destroy all  ? help  q quit",
-                    _ => " Esc back  ? help  q quit",
-                };
-                base.into()
-            }
-            View::Tiles => {
-                " ↑↓ navigate  Esc/t back  ? help  q quit".into()
+            Tab::TileMetrics => {
+                " ↑↓ navigate  ? help  q quit".into()
             }
         }
     };
@@ -835,86 +861,45 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
     };
     frame.render_widget(Paragraph::new(text).style(style), area);
 }
-fn render_help_popup(frame: &mut Frame, area: Rect) {
-    let lines = vec![
+fn render_help_popup(frame: &mut Frame, app: &App, area: Rect) {
+    let key = |k: &str| Span::styled(format!("  {k:<12} "), Style::default().fg(Color::Yellow));
+
+    let mut lines = vec![
         Line::from(Span::styled(" Keybindings ", Style::default().fg(Color::Cyan).bold())),
         Line::from(""),
-        Line::from(vec![
-            Span::styled("  ↑ / k      ", Style::default().fg(Color::Yellow)),
-            Span::raw("Move up"),
-        ]),
-        Line::from(vec![
-            Span::styled("  ↓ / j      ", Style::default().fg(Color::Yellow)),
-            Span::raw("Move down"),
-        ]),
-        Line::from(vec![
-            Span::styled("  Home / g   ", Style::default().fg(Color::Yellow)),
-            Span::raw("Jump to first"),
-        ]),
-        Line::from(vec![
-            Span::styled("  End / G    ", Style::default().fg(Color::Yellow)),
-            Span::raw("Jump to last"),
-        ]),
-        Line::from(vec![
-            Span::styled("  PgUp       ", Style::default().fg(Color::Yellow)),
-            Span::raw("Page up (10 rows)"),
-        ]),
-        Line::from(vec![
-            Span::styled("  PgDn       ", Style::default().fg(Color::Yellow)),
-            Span::raw("Page down (10 rows)"),
-        ]),
-        Line::from(vec![
-            Span::styled("  Enter      ", Style::default().fg(Color::Yellow)),
-            Span::raw("Open segment / toggle app group"),
-        ]),
-        Line::from(vec![
-            Span::styled("  Esc / Bksp ", Style::default().fg(Color::Yellow)),
-            Span::raw("Back / clear filter / quit"),
-        ]),
-        Line::from(vec![
-            Span::styled("  /          ", Style::default().fg(Color::Yellow)),
-            Span::raw("Filter segments by name"),
-        ]),
-        Line::from(vec![
-            Span::styled("  s          ", Style::default().fg(Color::Yellow)),
-            Span::raw("Cycle sort (name → kind → status → activity)"),
-        ]),
-        Line::from(vec![
-            Span::styled("  a          ", Style::default().fg(Color::Yellow)),
-            Span::raw("Toggle show/hide dead segments"),
-        ]),
-        Line::from(vec![
-            Span::styled("  d          ", Style::default().fg(Color::Yellow)),
-            Span::raw("Destroy dead segment"),
-        ]),
-        Line::from(vec![
-            Span::styled("  D          ", Style::default().fg(Color::Yellow)),
-            Span::raw("Destroy all dead segments"),
-        ]),
-        Line::from(vec![
-            Span::styled("  t          ", Style::default().fg(Color::Yellow)),
-            Span::raw("Tile metrics view"),
-        ]),
-        Line::from(vec![
-            Span::styled("  r          ", Style::default().fg(Color::Yellow)),
-            Span::raw("Force refresh"),
-        ]),
-        Line::from(vec![
-            Span::styled("  ?          ", Style::default().fg(Color::Yellow)),
-            Span::raw("Toggle this help"),
-        ]),
-        Line::from(vec![
-            Span::styled("  q          ", Style::default().fg(Color::Yellow)),
-            Span::raw("Quit"),
-        ]),
+        Line::from(vec![key("1 / 2"), Span::raw("Switch tabs")]),
+        Line::from(vec![key("↑ / k"), Span::raw("Move up")]),
+        Line::from(vec![key("↓ / j"), Span::raw("Move down")]),
+        Line::from(vec![key("Home / g"), Span::raw("Jump to first")]),
+        Line::from(vec![key("End / G"), Span::raw("Jump to last")]),
+        Line::from(vec![key("PgUp"), Span::raw("Page up (10 rows)")]),
+        Line::from(vec![key("PgDn"), Span::raw("Page down (10 rows)")]),
+    ];
+
+    if app.active_tab == Tab::Segments {
+        lines.extend([
+            Line::from(vec![key("Enter"), Span::raw("Open segment / toggle app group")]),
+            Line::from(vec![key("Esc / Bksp"), Span::raw("Back / clear filter / quit")]),
+            Line::from(vec![key("/"), Span::raw("Filter segments by name")]),
+            Line::from(vec![key("s"), Span::raw("Cycle sort (name → kind → status → activity)")]),
+            Line::from(vec![key("a"), Span::raw("Toggle show/hide dead segments")]),
+            Line::from(vec![key("d"), Span::raw("Destroy dead segment")]),
+            Line::from(vec![key("D"), Span::raw("Destroy all dead segments")]),
+            Line::from(vec![key("r"), Span::raw("Force refresh")]),
+        ]);
+    }
+
+    lines.extend([
+        Line::from(vec![key("?"), Span::raw("Toggle this help")]),
+        Line::from(vec![key("q"), Span::raw("Quit")]),
         Line::from(""),
         Line::from(Span::styled(
             "  Press ? to close",
             Style::default().fg(Color::DarkGray).italic(),
         )),
-    ];
+    ]);
 
-    let popup_area = centered_rect(52, lines.len() as u16 + 2, area);
+    let popup_area = centered_rect(56, lines.len() as u16 + 2, area);
     frame.render_widget(Clear, popup_area);
     frame.render_widget(
         Paragraph::new(lines).block(

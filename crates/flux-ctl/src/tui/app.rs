@@ -97,11 +97,37 @@ pub struct AppGroup {
     pub expanded: bool,
 }
 
+/// Top-level tabs (switched with number keys 1, 2, …).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tab {
+    Segments,
+    TileMetrics,
+}
+
+impl Tab {
+    pub const ALL: &'static [Tab] = &[Tab::Segments, Tab::TileMetrics];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Tab::Segments => "Segments",
+            Tab::TileMetrics => "Tile Metrics",
+        }
+    }
+
+    /// 1-based index for display / keyboard shortcut.
+    pub fn number(self) -> usize {
+        match self {
+            Tab::Segments => 1,
+            Tab::TileMetrics => 2,
+        }
+    }
+}
+
+/// View within the **Segments** tab.
 #[derive(Clone, Debug)]
 pub enum View {
     List,
     Detail(DetailState),
-    Tiles,
 }
 
 #[derive(Clone, Debug)]
@@ -128,6 +154,7 @@ pub struct App {
     pub app_filter: Option<String>,
     pub last_refresh: Instant,
     pub show_help: bool,
+    pub active_tab: Tab,
     pub view: View,
     pub status_msg: Option<(String, Instant)>,
     pub confirm_cleanup: bool,
@@ -179,6 +206,7 @@ impl App {
             app_filter: app_filter.map(String::from),
             last_refresh: Instant::now(),
             show_help: false,
+            active_tab: Tab::Segments,
             view: View::List,
             status_msg: None,
             confirm_cleanup: false,
@@ -209,6 +237,7 @@ impl App {
             app_filter: None,
             last_refresh: Instant::now(),
             show_help: false,
+            active_tab: Tab::Segments,
             view: View::List,
             status_msg: None,
             confirm_cleanup: false,
@@ -445,84 +474,96 @@ impl App {
     }
 
     pub fn next(&mut self) {
-        match &mut self.view {
-            View::List => {
-                if self.total_rows > 0 {
-                    self.selected = (self.selected + 1).min(self.total_rows.saturating_sub(1));
+        match self.active_tab {
+            Tab::Segments => match &mut self.view {
+                View::List => {
+                    if self.total_rows > 0 {
+                        self.selected = (self.selected + 1).min(self.total_rows.saturating_sub(1));
+                    }
                 }
-            }
-            View::Detail(detail) => {
-                if !detail.pids.is_empty() {
-                    detail.selected_pid =
-                        (detail.selected_pid + 1).min(detail.pids.len().saturating_sub(1));
+                View::Detail(detail) => {
+                    if !detail.pids.is_empty() {
+                        detail.selected_pid =
+                            (detail.selected_pid + 1).min(detail.pids.len().saturating_sub(1));
+                    }
                 }
-            }
-            View::Tiles => self.tile_metrics.select_next(),
+            },
+            Tab::TileMetrics => self.tile_metrics.select_next(),
         }
     }
 
     pub fn previous(&mut self) {
-        match &mut self.view {
-            View::List => {
-                self.selected = self.selected.saturating_sub(1);
-            }
-            View::Detail(detail) => {
-                detail.selected_pid = detail.selected_pid.saturating_sub(1);
-            }
-            View::Tiles => self.tile_metrics.select_prev(),
+        match self.active_tab {
+            Tab::Segments => match &mut self.view {
+                View::List => {
+                    self.selected = self.selected.saturating_sub(1);
+                }
+                View::Detail(detail) => {
+                    detail.selected_pid = detail.selected_pid.saturating_sub(1);
+                }
+            },
+            Tab::TileMetrics => self.tile_metrics.select_prev(),
         }
     }
 
     pub fn home(&mut self) {
-        match &mut self.view {
-            View::List => self.selected = 0,
-            View::Detail(detail) => detail.selected_pid = 0,
-            View::Tiles => self.tile_metrics.select_home(),
+        match self.active_tab {
+            Tab::Segments => match &mut self.view {
+                View::List => self.selected = 0,
+                View::Detail(detail) => detail.selected_pid = 0,
+            },
+            Tab::TileMetrics => self.tile_metrics.select_home(),
         }
     }
 
     pub fn end(&mut self) {
-        match &mut self.view {
-            View::List => {
-                if self.total_rows > 0 {
-                    self.selected = self.total_rows - 1;
+        match self.active_tab {
+            Tab::Segments => match &mut self.view {
+                View::List => {
+                    if self.total_rows > 0 {
+                        self.selected = self.total_rows - 1;
+                    }
                 }
-            }
-            View::Detail(detail) => {
-                if !detail.pids.is_empty() {
-                    detail.selected_pid = detail.pids.len() - 1;
+                View::Detail(detail) => {
+                    if !detail.pids.is_empty() {
+                        detail.selected_pid = detail.pids.len() - 1;
+                    }
                 }
-            }
-            View::Tiles => self.tile_metrics.select_end(),
+            },
+            Tab::TileMetrics => self.tile_metrics.select_end(),
         }
     }
 
     pub fn page_up(&mut self) {
-        match &mut self.view {
-            View::List => {
-                self.selected = self.selected.saturating_sub(10);
-            }
-            View::Detail(detail) => {
-                detail.selected_pid = detail.selected_pid.saturating_sub(10);
-            }
-            View::Tiles => self.tile_metrics.select_page_up(),
+        match self.active_tab {
+            Tab::Segments => match &mut self.view {
+                View::List => {
+                    self.selected = self.selected.saturating_sub(10);
+                }
+                View::Detail(detail) => {
+                    detail.selected_pid = detail.selected_pid.saturating_sub(10);
+                }
+            },
+            Tab::TileMetrics => self.tile_metrics.select_page_up(),
         }
     }
 
     pub fn page_down(&mut self) {
-        match &mut self.view {
-            View::List => {
-                if self.total_rows > 0 {
-                    self.selected = (self.selected + 10).min(self.total_rows.saturating_sub(1));
+        match self.active_tab {
+            Tab::Segments => match &mut self.view {
+                View::List => {
+                    if self.total_rows > 0 {
+                        self.selected = (self.selected + 10).min(self.total_rows.saturating_sub(1));
+                    }
                 }
-            }
-            View::Detail(detail) => {
-                if !detail.pids.is_empty() {
-                    detail.selected_pid =
-                        (detail.selected_pid + 10).min(detail.pids.len().saturating_sub(1));
+                View::Detail(detail) => {
+                    if !detail.pids.is_empty() {
+                        detail.selected_pid =
+                            (detail.selected_pid + 10).min(detail.pids.len().saturating_sub(1));
+                    }
                 }
-            }
-            View::Tiles => self.tile_metrics.select_page_down(),
+            },
+            Tab::TileMetrics => self.tile_metrics.select_page_down(),
         }
     }
 
@@ -537,7 +578,6 @@ impl App {
 
     pub fn enter(&mut self) {
         match &self.view {
-            View::Tiles => {}
             View::List => {
                 let mut row = 0;
                 for (gi, group) in self.groups.iter_mut().enumerate() {
@@ -582,7 +622,7 @@ impl App {
 
     pub fn back(&mut self) {
         match &self.view {
-            View::Detail(_) | View::Tiles => self.view = View::List,
+            View::Detail(_) => self.view = View::List,
             View::List => {}
         }
     }
@@ -610,7 +650,6 @@ impl App {
         match &self.view {
             View::List => self.request_cleanup_list(),
             View::Detail(_) => self.request_cleanup_detail(),
-            View::Tiles => {}
         }
     }
 
@@ -782,76 +821,93 @@ impl App {
             return false;
         }
 
-        let confirming = match &self.view {
-            View::List => self.confirm_cleanup || self.confirm_cleanup_all,
-            View::Detail(d) => d.confirm_cleanup,
-            View::Tiles => false,
-        };
-        if confirming {
-            match key.code {
-                KeyCode::Enter => {
-                    if self.confirm_cleanup_all {
-                        self.request_cleanup_all();
-                    } else {
-                        self.request_cleanup();
-                    }
-                }
-                _ => self.cancel_cleanup(),
+        // ── Global keys (work in any tab) ───────────────────────────
+        match key.code {
+            KeyCode::Char('q') => return true,
+            KeyCode::Char('?') => {
+                self.toggle_help();
+                return false;
             }
-            return false;
+            // Tab switching via number keys.
+            KeyCode::Char('1') => {
+                self.active_tab = Tab::Segments;
+                return false;
+            }
+            KeyCode::Char('2') => {
+                self.active_tab = Tab::TileMetrics;
+                return false;
+            }
+            _ => {}
         }
 
-        match &self.view {
-            View::List => match key.code {
-                KeyCode::Char('q') | KeyCode::Esc => {
-                    if !self.filter_text.is_empty() {
-                        self.filter_text.clear();
-                        self.refresh();
-                    } else {
-                        return true;
+        // ── Confirmation dialogs (segments tab only) ───────────────────
+        if self.active_tab == Tab::Segments {
+            let confirming = match &self.view {
+                View::List => self.confirm_cleanup || self.confirm_cleanup_all,
+                View::Detail(d) => d.confirm_cleanup,
+            };
+            if confirming {
+                match key.code {
+                    KeyCode::Enter => {
+                        if self.confirm_cleanup_all {
+                            self.request_cleanup_all();
+                        } else {
+                            self.request_cleanup();
+                        }
                     }
+                    _ => self.cancel_cleanup(),
                 }
-                KeyCode::Char('?') => self.toggle_help(),
-                KeyCode::Up | KeyCode::Char('k') => self.previous(),
-                KeyCode::Down | KeyCode::Char('j') => self.next(),
-                KeyCode::Home | KeyCode::Char('g') => self.home(),
-                KeyCode::End | KeyCode::Char('G') => self.end(),
-                KeyCode::PageUp => self.page_up(),
-                KeyCode::PageDown => self.page_down(),
-                KeyCode::Enter => self.enter(),
-                KeyCode::Char('d') => self.request_cleanup(),
-                KeyCode::Char('D') => self.request_cleanup_all(),
-                KeyCode::Char('r') => self.refresh(),
-                KeyCode::Char('/') => {
-                    self.filter_mode = true;
-                }
-                KeyCode::Char('s') => self.toggle_sort(),
-                KeyCode::Char('a') => {
-                    self.hide_dead = !self.hide_dead;
-                    self.refresh();
-                }
-                KeyCode::Char('t') => self.view = View::Tiles,
-                _ => {}
+                return false;
+            }
+        }
+
+        // ── Tab-specific keys ──────────────────────────────────────────
+        match self.active_tab {
+            Tab::Segments => match &self.view {
+                View::List => match key.code {
+                    KeyCode::Esc => {
+                        if !self.filter_text.is_empty() {
+                            self.filter_text.clear();
+                            self.refresh();
+                        } else {
+                            return true;
+                        }
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => self.previous(),
+                    KeyCode::Down | KeyCode::Char('j') => self.next(),
+                    KeyCode::Home | KeyCode::Char('g') => self.home(),
+                    KeyCode::End | KeyCode::Char('G') => self.end(),
+                    KeyCode::PageUp => self.page_up(),
+                    KeyCode::PageDown => self.page_down(),
+                    KeyCode::Enter => self.enter(),
+                    KeyCode::Char('d') => self.request_cleanup(),
+                    KeyCode::Char('D') => self.request_cleanup_all(),
+                    KeyCode::Char('r') => self.refresh(),
+                    KeyCode::Char('/') => {
+                        self.filter_mode = true;
+                    }
+                    KeyCode::Char('s') => self.toggle_sort(),
+                    KeyCode::Char('a') => {
+                        self.hide_dead = !self.hide_dead;
+                        self.refresh();
+                    }
+                    _ => {}
+                },
+                View::Detail(_) => match key.code {
+                    KeyCode::Esc | KeyCode::Backspace => self.back(),
+                    KeyCode::Char('d') => self.request_cleanup(),
+                    KeyCode::Char('D') => self.request_cleanup_all(),
+                    KeyCode::Char('r') => self.refresh(),
+                    KeyCode::Up | KeyCode::Char('k') => self.previous(),
+                    KeyCode::Down | KeyCode::Char('j') => self.next(),
+                    KeyCode::Home | KeyCode::Char('g') => self.home(),
+                    KeyCode::End | KeyCode::Char('G') => self.end(),
+                    KeyCode::PageUp => self.page_up(),
+                    KeyCode::PageDown => self.page_down(),
+                    _ => {}
+                },
             },
-            View::Tiles => match key.code {
-                KeyCode::Char('q') => return true,
-                KeyCode::Esc | KeyCode::Backspace | KeyCode::Char('t') => self.back(),
-                KeyCode::Char('?') => self.toggle_help(),
-                KeyCode::Up | KeyCode::Char('k') => self.previous(),
-                KeyCode::Down | KeyCode::Char('j') => self.next(),
-                KeyCode::Home | KeyCode::Char('g') => self.home(),
-                KeyCode::End | KeyCode::Char('G') => self.end(),
-                KeyCode::PageUp => self.page_up(),
-                KeyCode::PageDown => self.page_down(),
-                _ => {}
-            },
-            View::Detail(_) => match key.code {
-                KeyCode::Char('q') => return true,
-                KeyCode::Esc | KeyCode::Backspace => self.back(),
-                KeyCode::Char('?') => self.toggle_help(),
-                KeyCode::Char('d') => self.request_cleanup(),
-                KeyCode::Char('D') => self.request_cleanup_all(),
-                KeyCode::Char('r') => self.refresh(),
+            Tab::TileMetrics => match key.code {
                 KeyCode::Up | KeyCode::Char('k') => self.previous(),
                 KeyCode::Down | KeyCode::Char('j') => self.next(),
                 KeyCode::Home | KeyCode::Char('g') => self.home(),
