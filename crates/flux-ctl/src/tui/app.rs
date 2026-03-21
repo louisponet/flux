@@ -11,6 +11,7 @@ use ratatui::widgets::TableState;
 use crate::{
     discovery,
     discovery::{DiscoveredEntry, ShmemCache},
+    tui::tile_metrics::TileMetricsStore,
 };
 
 /// Rolling window (in seconds) over which msgs/s samples are averaged.
@@ -100,6 +101,7 @@ pub struct AppGroup {
 pub enum View {
     List,
     Detail(DetailState),
+    Tiles,
 }
 
 #[derive(Clone, Debug)]
@@ -155,6 +157,8 @@ pub struct App {
     shmem_cache: ShmemCache,
     /// Persistent table state so the viewport offset survives across renders.
     pub table_state: TableState,
+    /// Tile metrics discovery and stats.
+    pub tile_metrics: TileMetricsStore,
 }
 
 fn status_msg_duration() -> Duration {
@@ -190,6 +194,7 @@ impl App {
             proc_map_last_scan: None,
             shmem_cache: ShmemCache::new(),
             table_state: TableState::default().with_selected(0),
+            tile_metrics: TileMetricsStore::new(base_dir),
         };
         app.refresh();
         app
@@ -219,6 +224,7 @@ impl App {
             proc_map_last_scan: None,
             shmem_cache: ShmemCache::new(),
             table_state: TableState::default().with_selected(0),
+            tile_metrics: TileMetricsStore::new(Path::new("")),
         };
         app.recount_rows();
         app
@@ -435,6 +441,7 @@ impl App {
         if self.last_refresh.elapsed() >= refresh_interval() {
             self.refresh();
         }
+        self.tile_metrics.tick();
     }
 
     pub fn next(&mut self) {
@@ -450,6 +457,7 @@ impl App {
                         (detail.selected_pid + 1).min(detail.pids.len().saturating_sub(1));
                 }
             }
+            View::Tiles => self.tile_metrics.select_next(),
         }
     }
 
@@ -461,6 +469,7 @@ impl App {
             View::Detail(detail) => {
                 detail.selected_pid = detail.selected_pid.saturating_sub(1);
             }
+            View::Tiles => self.tile_metrics.select_prev(),
         }
     }
 
@@ -468,6 +477,7 @@ impl App {
         match &mut self.view {
             View::List => self.selected = 0,
             View::Detail(detail) => detail.selected_pid = 0,
+            View::Tiles => self.tile_metrics.select_home(),
         }
     }
 
@@ -483,6 +493,7 @@ impl App {
                     detail.selected_pid = detail.pids.len() - 1;
                 }
             }
+            View::Tiles => self.tile_metrics.select_end(),
         }
     }
 
@@ -494,6 +505,7 @@ impl App {
             View::Detail(detail) => {
                 detail.selected_pid = detail.selected_pid.saturating_sub(10);
             }
+            View::Tiles => self.tile_metrics.select_page_up(),
         }
     }
 
@@ -510,6 +522,7 @@ impl App {
                         (detail.selected_pid + 10).min(detail.pids.len().saturating_sub(1));
                 }
             }
+            View::Tiles => self.tile_metrics.select_page_down(),
         }
     }
 
@@ -524,6 +537,7 @@ impl App {
 
     pub fn enter(&mut self) {
         match &self.view {
+            View::Tiles => {}
             View::List => {
                 let mut row = 0;
                 for (gi, group) in self.groups.iter_mut().enumerate() {
@@ -567,8 +581,9 @@ impl App {
     }
 
     pub fn back(&mut self) {
-        if let View::Detail(_) = &self.view {
-            self.view = View::List;
+        match &self.view {
+            View::Detail(_) | View::Tiles => self.view = View::List,
+            View::List => {}
         }
     }
 
@@ -595,6 +610,7 @@ impl App {
         match &self.view {
             View::List => self.request_cleanup_list(),
             View::Detail(_) => self.request_cleanup_detail(),
+            View::Tiles => {}
         }
     }
 
@@ -769,6 +785,7 @@ impl App {
         let confirming = match &self.view {
             View::List => self.confirm_cleanup || self.confirm_cleanup_all,
             View::Detail(d) => d.confirm_cleanup,
+            View::Tiles => false,
         };
         if confirming {
             match key.code {
@@ -813,6 +830,19 @@ impl App {
                     self.hide_dead = !self.hide_dead;
                     self.refresh();
                 }
+                KeyCode::Char('t') => self.view = View::Tiles,
+                _ => {}
+            },
+            View::Tiles => match key.code {
+                KeyCode::Char('q') => return true,
+                KeyCode::Esc | KeyCode::Backspace | KeyCode::Char('t') => self.back(),
+                KeyCode::Char('?') => self.toggle_help(),
+                KeyCode::Up | KeyCode::Char('k') => self.previous(),
+                KeyCode::Down | KeyCode::Char('j') => self.next(),
+                KeyCode::Home | KeyCode::Char('g') => self.home(),
+                KeyCode::End | KeyCode::Char('G') => self.end(),
+                KeyCode::PageUp => self.page_up(),
+                KeyCode::PageDown => self.page_down(),
                 _ => {}
             },
             View::Detail(_) => match key.code {
